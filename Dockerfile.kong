@@ -1,0 +1,14 @@
+# Use the official Kong image
+FROM kong:latest
+
+# Switch to root user to install curl
+USER root
+
+# Update and install curl using apt-get (since Kong uses a Debian-based image)
+RUN apt-get update && apt-get install -y curl
+
+# Set the entrypoint (optional, if you want to run a script automatically)
+# ENTRYPOINT ["/bin/bash", "-c", "/etc/kong/register_services.sh && /bin/bash /usr/sbin/kong reload && /bin/bash /usr/sbin/kong start"]
+
+# Switch back to the Kong user (optional, to run Kong as the original user)
+USER kong

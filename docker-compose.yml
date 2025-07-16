@@ -1,0 +1,169 @@
+version: "3.8"
+services:
+  kong:
+    image: kong:latest
+    environment:
+      KONG_DATABASE: "off"  # Disable database usage (DB-less mode)
+      KONG_PORT_MAPS: "8080:8080"
+      KONG_ADMIN_LISTEN: 0.0.0.0:8001, 0.0.0.0:8444 ssl
+      KONG_ADMIN_GUI_HOST: "0.0.0.0"
+      KONG_ADMIN_GUI_PORT: "8001"
+      KONG_DECLARATIVE_CONFIG: /etc/kong/kong.yml
+      KONG_PORTS: "8080"
+      KONG_PORTS_PROXY: "8080"
+      KONG_PORTS_ADMIN: "8001"
+      KONG_PORTS_STATS: "9000"
+    ports:
+      - "8000:8000"  # API gateway
+      - "8001:8001"  # Kong Admin
+      - "8443:8443"
+      - "9000:9000"  # Prometheus metrics
+    volumes:
+      - ./kong.yml:/etc/kong/kong.yml  # Mount the kong.yml configuration file
+    networks:
+      - api-network
+      - idp-network
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+
+  mobylab-app-db:
+    image: postgres:13.2-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - mobylab-app-db-vol:/var/lib/postgresql/data
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    networks:
+      - idp-network  # Attach to the overlay network
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    ports:
+      - "9100:9100"
+    deploy:
+      mode: global  # This ensures that Node Exporter runs on all Swarm nodes
+      restart_policy:
+        condition: on-failure
+    networks:
+      - idp-network  # Attach to the overlay network
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml  # Mount the config file
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    networks:
+      - idp-network  # Attach to the overlay network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - grafana-storage:/var/lib/grafana  # Persistent storage for Grafana data
+      - ./provisioning:/etc/grafana/provisioning  # Mounting provision
+      - ./load_dashboards.sh:/etc/grafana/load_dashboards.sh  # Mount the script
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "ivv123"  # Using environment variable for admin password
+      GF_SECURITY_ADMIN_USER: "admin"  # Using environment variable for admin username
+    networks:
+      - api-network
+      - idp-network  # Attach to both networks
+
+  auth:
+    image: ivvlad/auth-service-idp-ivv-imm:latest
+    ports:
+      - "8081:8090"
+    environment:
+      SPRING_PROFILES_ACTIVE: auth
+      SPRING_DATASOURCE_URL: jdbc:postgresql://mobylab-app-db:5432/postgres
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    networks:
+      - idp-network  # Attach to the overlay network
+
+  backend:
+    image: ivvlad/backend-service-idp-ivv-imm:latest
+    ports:
+      - "8080:8090"
+    environment:
+      SPRING_PROFILES_ACTIVE: backend
+      SPRING_DATASOURCE_URL: jdbc:postgresql://mobylab-app-db:5432/postgres
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+    deploy:
+      replicas: 2  # You can adjust the number of replicas
+      restart_policy:
+        condition: on-failure
+    networks:
+      - api-network
+      - idp-network  # Attach to both networks
+
+  # pgAdmin Service
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: "admin@pgadmin.org"
+      PGADMIN_DEFAULT_PASSWORD: "admin"
+    ports:
+      - "5050:80"  # Exposing pgAdmin web UI to port 5050 on the host
+    networks:
+      - api-network
+      - idp-network  # Ensure pgAdmin is connected to both networks
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: on-failure
+    volumes:
+      - pgadmin-data:/var/lib/pgadmin
+
+  portainer:
+    image: portainer/portainer-ce
+    ports:
+      - "9001:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - api-network
+      - idp-network  # Attach to both networks
+
+volumes:
+  mobylab-app-db-vol:
+  prometheus-data:
+  grafana-storage:
+    driver: local  # Use a local driver for persistence
+  kong-db:
+  pgadmin-data:
+  portainer_data:
+
+networks:
+  api-network:
+    driver: overlay
+  idp-network:
+    driver: overlay
